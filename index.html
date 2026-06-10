@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TikTok Bypass - 1080p 60fps / 120fps</title>
+    <style>
+        body { background: #0a0a0a; color: #00ffcc; font-family: monospace; padding: 20px; margin: 0; }
+        .container { max-width: 800px; margin: 0 auto; }
+        button, input, select { background: #1a1a1a; color: #00ffcc; border: 1px solid #00ffcc; padding: 12px 20px; margin: 10px 5px; font-family: monospace; font-size: 14px; cursor: pointer; }
+        button:hover { background: #00ffcc22; }
+        .option-group { border: 1px solid #00ffcc; padding: 20px; margin: 20px 0; border-radius: 8px; }
+        pre { background: #000000aa; padding: 15px; overflow-x: auto; max-height: 400px; border: 1px solid #00ffcc33; border-radius: 8px; font-size: 12px; white-space: pre-wrap; word-wrap: break-word; }
+        h2 { margin-top: 0; }
+        input[type="radio"] { margin-left: 20px; }
+        .footer { font-size: 11px; text-align: center; margin-top: 30px; color: #00ffcc88; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h2>TikTok Bypass Tool - 1080p Preservation</h2>
+    <div class="option-group">
+        <label><strong>Quality Preset:</strong></label><br><br>
+        <input type="radio" name="preset" value="1080p_60fps" id="opt60" checked>
+        <label for="opt60">1080p / 60 fps / 25 Mbps</label><br>
+        <input type="radio" name="preset" value="1080p_120fps" id="opt120">
+        <label for="opt120">1080p / 120 fps / 35 Mbps</label><br>
+    </div>
+    <input type="file" id="fileInput" accept="video/mp4">
+    <button id="processBtn">Process & Download (Bypass Ready)</button>
+    <pre id="log">Waiting for input...</pre>
+    <div class="footer">Processes entirely in your browser. No upload to any server. 1080p 60/120fps preserved.</div>
+</div>
+<script src="https://unpkg.com/@ffmpeg/ffmpeg@0.12.6/dist/umd/ffmpeg.js"></script>
+<script>
+    (function() {
+        const log = document.getElementById('log');
+        const fileInput = document.getElementById('fileInput');
+        const processBtn = document.getElementById('processBtn');
+        let ffmpeg = null;
+        let ffmpegLoading = false;
+
+        function logMessage(msg) {
+            log.innerText = msg;
+            console.log(msg);
+        }
+
+        async function loadFFmpeg() {
+            if (ffmpeg) return ffmpeg;
+            if (ffmpegLoading) {
+                logMessage('FFmpeg already loading, please wait...');
+                while (ffmpegLoading) await new Promise(r => setTimeout(r, 100));
+                return ffmpeg;
+            }
+            ffmpegLoading = true;
+            logMessage('Loading FFmpeg WASM (25MB)... This may take 30-60 seconds.');
+            try {
+                const { FFmpeg } = window;
+                ffmpeg = new FFmpeg();
+                await ffmpeg.load({
+                    coreURL: 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.js',
+                    wasmURL: 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.wasm'
+                });
+                logMessage('FFmpeg ready. Select a video and click process.');
+                ffmpegLoading = false;
+                return ffmpeg;
+            } catch (err) {
+                logMessage('FFmpeg load error: ' + err.message);
+                ffmpegLoading = false;
+                throw err;
+            }
+        }
+
+        async function processVideo() {
+            try {
+                if (!fileInput.files || fileInput.files.length === 0) {
+                    logMessage('No file selected. Please choose an MP4 video.');
+                    return;
+                }
+                const file = fileInput.files[0];
+                const is120fps = document.getElementById('opt120').checked;
+                const fps = is120fps ? 120 : 60;
+                const bitrate = is120fps ? '35000k' : '25000k';
+                const gop = fps * 2;
+                
+                logMessage(`Processing: 1080p, ${fps} fps, ${bitrate}, GOP=${gop}...`);
+                const engine = await loadFFmpeg();
+                if (!engine) { logMessage('FFmpeg failed to load.'); return; }
+                
+                logMessage('Reading file into memory...');
+                const data = new Uint8Array(await file.arrayBuffer());
+                logMessage(`File size: ${(data.length / 1024 / 1024).toFixed(2)} MB`);
+                await engine.writeFile('input.mp4', data);
+                logMessage('Encoding video (this may take 1-5 minutes)...');
+                
+                await engine.exec([
+                    '-i', 'input.mp4', '-c:v', 'libx264', '-profile:v', 'high', '-level', '4.2',
+                    '-b:v', bitrate, '-r', fps.toString(), '-g', gop.toString(),
+                    '-bf', '2', '-refs', '3', '-pix_fmt', 'yuv422p',
+                    '-x264-params', 'nal-hrd=cbr:force-cfr=1', '-movflags', '+faststart', 'output.mp4'
+                ]);
+                
+                logMessage('Reading encoded file...');
+                const outputData = await engine.readFile('output.mp4');
+                const buffer = new Uint8Array(outputData);
+                
+                logMessage('Applying moov atom padding (56 bytes)...');
+                let moovIndex = -1;
+                for (let i = 0; i < buffer.length - 4; i++) {
+                    if (buffer[i] === 0x6D && buffer[i+1] === 0x6F && buffer[i+2] === 0x6F && buffer[i+3] === 0x76) {
+                        moovIndex = i; break;
+                    }
+                }
+                
+                let finalBuffer;
+                if (moovIndex !== -1) {
+                    const padding = new Uint8Array(56);
+                    const before = buffer.slice(0, moovIndex);
+                    const after = buffer.slice(moovIndex);
+                    finalBuffer = new Uint8Array(before.length + 56 + after.length);
+                    finalBuffer.set(before, 0);
+                    finalBuffer.set(padding, before.length);
+                    finalBuffer.set(after, before.length + 56);
+                    logMessage('Padding applied.');
+                } else {
+                    logMessage('Warning: moov not found, using original.');
+                    finalBuffer = buffer;
+                }
+                
+                const blob = new Blob([finalBuffer], { type: 'video/mp4' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `tiktok_bypass_1080p_${fps}fps.mp4`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+                logMessage(`SUCCESS! Saved as tiktok_bypass_1080p_${fps}fps.mp4`);
+                await engine.deleteFile('input.mp4');
+                await engine.deleteFile('output.mp4');
+            } catch (err) {
+                logMessage('ERROR: ' + err.message);
+                console.error(err);
+            }
+        }
+        
+        processBtn.onclick = processVideo;
+        logMessage('Ready. Select MP4 file, choose preset, click Process.');
+        window.addEventListener('load', () => {
+            setTimeout(() => {
+                if (!ffmpeg && !ffmpegLoading) {
+                    logMessage('Pre-loading FFmpeg...');
+                    loadFFmpeg().catch(e => logMessage('Pre-load failed: ' + e.message));
+                }
+            }, 1000);
+        });
+    })();
+</script>
+</body>
+</html>
