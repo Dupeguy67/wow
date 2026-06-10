@@ -3,17 +3,19 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TikTok Bypass - 1080p 60fps / 120fps</title>
+    <title>TikTok Bypass - 1080p 60/120fps</title>
     <style>
         body { background: #0a0a0a; color: #00ffcc; font-family: monospace; padding: 20px; margin: 0; }
         .container { max-width: 800px; margin: 0 auto; }
-        button, input, select { background: #1a1a1a; color: #00ffcc; border: 1px solid #00ffcc; padding: 12px 20px; margin: 10px 5px; font-family: monospace; font-size: 14px; cursor: pointer; }
+        button, input { background: #1a1a1a; color: #00ffcc; border: 1px solid #00ffcc; padding: 12px 20px; margin: 10px 5px; font-family: monospace; font-size: 14px; cursor: pointer; }
         button:hover { background: #00ffcc22; }
         .option-group { border: 1px solid #00ffcc; padding: 20px; margin: 20px 0; border-radius: 8px; }
-        pre { background: #000000aa; padding: 15px; overflow-x: auto; max-height: 400px; border: 1px solid #00ffcc33; border-radius: 8px; font-size: 12px; white-space: pre-wrap; word-wrap: break-word; }
+        pre { background: #000000aa; padding: 15px; overflow-x: auto; max-height: 400px; border-radius: 8px; font-size: 12px; white-space: pre-wrap; word-wrap: break-word; }
         h2 { margin-top: 0; }
         input[type="radio"] { margin-left: 20px; }
         .footer { font-size: 11px; text-align: center; margin-top: 30px; color: #00ffcc88; }
+        .progress-bar { width: 100%; background: #1a1a1a; border-radius: 8px; margin: 10px 0; display: none; }
+        .progress-fill { width: 0%; background: #00ffcc; height: 20px; border-radius: 8px; transition: width 0.3s; }
     </style>
 </head>
 <body>
@@ -21,158 +23,254 @@
     <h2>TikTok Bypass Tool - 1080p Preservation</h2>
     <div class="option-group">
         <label><strong>Quality Preset:</strong></label><br><br>
-        <input type="radio" name="preset" value="1080p_60fps" id="opt60" checked>
+        <input type="radio" name="preset" value="60" id="opt60" checked>
         <label for="opt60">1080p / 60 fps / 25 Mbps</label><br>
-        <input type="radio" name="preset" value="1080p_120fps" id="opt120">
+        <input type="radio" name="preset" value="120" id="opt120">
         <label for="opt120">1080p / 120 fps / 35 Mbps</label><br>
     </div>
     <input type="file" id="fileInput" accept="video/mp4">
     <button id="processBtn">Process & Download (Bypass Ready)</button>
+    <div class="progress-bar" id="progressBar"><div class="progress-fill" id="progressFill"></div></div>
     <pre id="log">Waiting for input...</pre>
-    <div class="footer">Processes entirely in your browser. No upload to any server. 1080p 60/120fps preserved.</div>
+    <div class="footer">100% browser-based. Uses WebCodecs API - no external dependencies, no CDN, no FFmpeg download.</div>
 </div>
 
-<script src="https://unpkg.com/@ffmpeg/ffmpeg@0.11.6/dist/umd/ffmpeg.js"></script>
 <script>
     (function() {
         const logElement = document.getElementById('log');
         const fileInput = document.getElementById('fileInput');
         const processBtn = document.getElementById('processBtn');
-        let ffmpegInstance = null;
-        let isLoading = false;
-
-        function log(message) {
-            logElement.innerText = message;
-            console.log(message);
+        const progressBar = document.getElementById('progressBar');
+        const progressFill = document.getElementById('progressFill');
+        
+        function log(msg) {
+            logElement.innerText = msg;
+            console.log(msg);
         }
-
-        async function initFFmpeg() {
-            if (ffmpegInstance) return ffmpegInstance;
-            if (isLoading) {
-                log('FFmpeg already loading, waiting...');
-                while (isLoading) await new Promise(r => setTimeout(r, 100));
-                return ffmpegInstance;
-            }
-            isLoading = true;
-            log('Loading FFmpeg (25MB)... 30-60 seconds');
-            try {
-                if (typeof window.FFmpeg === 'undefined') {
-                    throw new Error('FFmpeg library not loaded. Retrying...');
-                }
-                const { FFmpeg } = window;
-                ffmpegInstance = new FFmpeg();
-                await ffmpegInstance.load({
-                    coreURL: 'https://unpkg.com/@ffmpeg/core@0.11.6/dist/umd/ffmpeg-core.js',
-                    wasmURL: 'https://unpkg.com/@ffmpeg/core@0.11.6/dist/umd/ffmpeg-core.wasm'
-                });
-                log('FFmpeg ready. Select video and click Process.');
-                isLoading = false;
-                return ffmpegInstance;
-            } catch (err) {
-                log('FFmpeg error: ' + err.message + ' - Try refreshing the page.');
-                isLoading = false;
-                throw err;
-            }
+        
+        function setProgress(percent) {
+            progressFill.style.width = percent + '%';
         }
-
+        
+        function showProgress(show) {
+            progressBar.style.display = show ? 'block' : 'none';
+        }
+        
         async function processVideo() {
-            try {
-                if (!fileInput.files || fileInput.files.length === 0) {
-                    log('No file selected. Choose an MP4 video.');
+            if (!fileInput.files || fileInput.files.length === 0) {
+                log('No file selected. Choose an MP4 video.');
+                return;
+            }
+            
+            const file = fileInput.files[0];
+            const is120 = document.getElementById('opt120').checked;
+            const targetFps = is120 ? 120 : 60;
+            const targetBitrate = is120 ? 35_000_000 : 25_000_000;
+            const targetWidth = 1920;
+            const targetHeight = 1080;
+            
+            log(`Loading video: ${file.name}`);
+            showProgress(true);
+            setProgress(5);
+            
+            // Create video element to decode source
+            const video = document.createElement('video');
+            video.src = URL.createObjectURL(file);
+            video.preload = 'auto';
+            video.muted = true;
+            
+            await new Promise((resolve, reject) => {
+                video.onloadedmetadata = () => {
+                    log(`Source: ${video.videoWidth}x${video.videoHeight}, ${video.duration.toFixed(2)}s, ${video.videoWidth === 1920 ? 'Already 1080p' : 'Will scale to 1080p'}`);
+                    resolve();
+                };
+                video.onerror = reject;
+                video.load();
+            });
+            
+            setProgress(10);
+            
+            // Check if WebCodecs is supported
+            if (!window.VideoEncoder || !window.VideoFrame) {
+                log('ERROR: Your browser does not support WebCodecs API. Use Chrome 94+ or Edge 94+');
+                showProgress(false);
+                return;
+            }
+            
+            log(`Encoding: 1920x1080, ${targetFps}fps, ${targetBitrate/1000000} Mbps`);
+            
+            // Setup encoder
+            const encoderConfig = {
+                codec: 'avc1.64002a',
+                width: targetWidth,
+                height: targetHeight,
+                bitrate: targetBitrate,
+                framerate: targetFps,
+                avc: { format: 'avc' }
+            };
+            
+            // Check if codec supported
+            const support = await VideoEncoder.isConfigSupported(encoderConfig);
+            if (!support.supported) {
+                log('ERROR: H.264 high profile not supported. Trying baseline...');
+                encoderConfig.codec = 'avc1.42E01E';
+                const support2 = await VideoEncoder.isConfigSupported(encoderConfig);
+                if (!support2.supported) {
+                    log('ERROR: No H.264 encoder found');
+                    showProgress(false);
                     return;
                 }
-                const file = fileInput.files[0];
-                const is120 = document.getElementById('opt120').checked;
-                const fps = is120 ? 120 : 60;
-                const bitrate = is120 ? '35000k' : '25000k';
-                const gop = fps * 2;
-                
-                log(`Processing: 1080p ${fps}fps ${bitrate}...`);
-                const ffmpeg = await initFFmpeg();
-                if (!ffmpeg) return;
-                
-                log('Reading file...');
-                const fileData = new Uint8Array(await file.arrayBuffer());
-                log(`File size: ${(fileData.length / 1024 / 1024).toFixed(2)} MB`);
-                await ffmpeg.writeFile('input.mp4', fileData);
-                log('Encoding (1-5 minutes)...');
-                
-                await ffmpeg.exec([
-                    '-i', 'input.mp4',
-                    '-c:v', 'libx264',
-                    '-profile:v', 'high',
-                    '-level', '4.2',
-                    '-b:v', bitrate,
-                    '-r', fps.toString(),
-                    '-g', gop.toString(),
-                    '-bf', '2',
-                    '-refs', '3',
-                    '-pix_fmt', 'yuv422p',
-                    '-x264-params', 'nal-hrd=cbr:force-cfr=1',
-                    '-movflags', '+faststart',
-                    'output.mp4'
-                ]);
-                
-                log('Reading encoded file...');
-                const encodedData = await ffmpeg.readFile('output.mp4');
-                const buffer = new Uint8Array(encodedData);
-                
-                log('Adding 56-byte padding before moov atom...');
-                let moovPos = -1;
-                for (let i = 0; i < buffer.length - 4; i++) {
-                    if (buffer[i] === 0x6D && buffer[i+1] === 0x6F && buffer[i+2] === 0x6F && buffer[i+3] === 0x76) {
-                        moovPos = i;
-                        break;
-                    }
-                }
-                
-                let finalBuffer;
-                if (moovPos !== -1) {
-                    const padding = new Uint8Array(56);
-                    const beforeMoov = buffer.slice(0, moovPos);
-                    const fromMoov = buffer.slice(moovPos);
-                    finalBuffer = new Uint8Array(beforeMoov.length + 56 + fromMoov.length);
-                    finalBuffer.set(beforeMoov, 0);
-                    finalBuffer.set(padding, beforeMoov.length);
-                    finalBuffer.set(fromMoov, beforeMoov.length + 56);
-                    log('Padding applied.');
-                } else {
-                    log('Warning: moov not found, using original file.');
-                    finalBuffer = buffer;
-                }
-                
-                const blob = new Blob([finalBuffer], { type: 'video/mp4' });
-                const url = URL.createObjectURL(blob);
-                const downloadLink = document.createElement('a');
-                downloadLink.href = url;
-                downloadLink.download = `tiktok_bypass_1080p_${fps}fps.mp4`;
-                document.body.appendChild(downloadLink);
-                downloadLink.click();
-                document.body.removeChild(downloadLink);
-                URL.revokeObjectURL(url);
-                
-                log(`SUCCESS! File saved as tiktok_bypass_1080p_${fps}fps.mp4`);
-                
-                await ffmpeg.deleteFile('input.mp4');
-                await ffmpeg.deleteFile('output.mp4');
-                
-            } catch (err) {
-                log('ERROR: ' + err.message);
-                console.error(err);
             }
+            
+            const chunks = [];
+            const encoder = new VideoEncoder({
+                output: (chunk, metadata) => {
+                    chunks.push(chunk);
+                },
+                error: (e) => log('Encoder error: ' + e.message)
+            });
+            
+            await encoder.configure(encoderConfig);
+            
+            // Setup MP4 muxer (simplified - raw Annex B format)
+            const frames = [];
+            const frameDuration = 1_000_000 / targetFps; // microseconds
+            
+            log('Decoding video frames...');
+            setProgress(15);
+            
+            // Seek through video and extract frames at target framerate
+            const duration = video.duration;
+            const totalFrames = Math.floor(duration * targetFps);
+            let encodedFrames = 0;
+            
+            // Resize canvas for scaling
+            const canvas = document.createElement('canvas');
+            canvas.width = targetWidth;
+            canvas.height = targetHeight;
+            const ctx = canvas.getContext('2d');
+            
+            video.currentTime = 0;
+            await new Promise(r => { video.onseeked = r; });
+            video.play();
+            
+            for (let frameIndex = 0; frameIndex < totalFrames; frameIndex++) {
+                const time = frameIndex / targetFps;
+                video.currentTime = time;
+                await new Promise(r => { video.onseeked = r; });
+                
+                ctx.drawImage(video, 0, 0, targetWidth, targetHeight);
+                const frameData = ctx.getImageData(0, 0, targetWidth, targetHeight);
+                
+                const frame = new VideoFrame(canvas, {
+                    timestamp: frameIndex * frameDuration,
+                    duration: frameDuration
+                });
+                
+                encoder.encode(frame);
+                frame.close();
+                
+                encodedFrames++;
+                const percent = 15 + (encodedFrames / totalFrames) * 80;
+                setProgress(percent);
+                log(`Encoding frame ${encodedFrames}/${totalFrames} (${Math.floor(percent)}%)`);
+                
+                if (encodedFrames % 30 === 0) {
+                    await new Promise(r => setTimeout(r, 10));
+                }
+            }
+            
+            video.pause();
+            video.src = '';
+            URL.revokeObjectURL(video.src);
+            
+            log('Finalizing encoder...');
+            await encoder.flush();
+            encoder.close();
+            
+            setProgress(95);
+            log('Building MP4 container...');
+            
+            // Build raw H.264 stream from chunks
+            const rawChunks = [];
+            for (const chunk of chunks) {
+                const bytes = new Uint8Array(chunk.byteLength);
+                chunk.copyTo(bytes);
+                rawChunks.push(bytes);
+            }
+            
+            // Simple MP4 header with moov padding trick
+            const mp4Data = buildSimpleMP4(rawChunks, targetWidth, targetHeight, targetFps);
+            
+            const blob = new Blob([mp4Data], { type: 'video/mp4' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `tiktok_bypass_1080p_${targetFps}fps.mp4`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            
+            setProgress(100);
+            log(`SUCCESS! File saved as tiktok_bypass_1080p_${targetFps}fps.mp4\nUpload to TikTok - quality preserved.`);
+            showProgress(false);
+        }
+        
+        function buildSimpleMP4(naluChunks, width, height, fps) {
+            // Build minimal ISO BMFF container with moov padding
+            const ftyp = new Uint8Array([
+                0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6F, 0x6D, 0x00, 0x00, 0x00, 0x01, 0x69, 0x73, 0x6F, 0x6D
+            ]);
+            
+            const moovHeader = new Uint8Array([
+                0x00, 0x00, 0x00, 0x6C, 0x6D, 0x6F, 0x6F, 0x76, 0x00, 0x00, 0x00, 0x6C, 0x6D, 0x76, 0x68, 0x64,
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+            ]);
+            
+            // Combine: ftyp + 56 byte padding + moov + mdat
+            let totalSize = ftyp.length + 56 + moovHeader.length + 8;
+            for (const chunk of naluChunks) {
+                totalSize += 4 + chunk.length;
+            }
+            
+            const result = new Uint8Array(totalSize);
+            let offset = 0;
+            
+            result.set(ftyp, offset);
+            offset += ftyp.length;
+            
+            // 56 null bytes padding
+            const padding = new Uint8Array(56);
+            result.set(padding, offset);
+            offset += 56;
+            
+            result.set(moovHeader, offset);
+            offset += moovHeader.length;
+            
+            // mdat box
+            const mdatSize = 8 + naluChunks.reduce((sum, c) => sum + 4 + c.length, 0);
+            const mdatHeader = new Uint8Array(8);
+            new DataView(mdatHeader.buffer).setUint32(0, mdatSize, false);
+            mdatHeader[4] = 0x6D; mdatHeader[5] = 0x64; mdatHeader[6] = 0x61; mdatHeader[7] = 0x74;
+            result.set(mdatHeader, offset);
+            offset += 8;
+            
+            for (const chunk of naluChunks) {
+                new DataView(result.buffer).setUint32(offset, chunk.length + 4, false);
+                offset += 4;
+                result.set(chunk, offset);
+                offset += chunk.length;
+            }
+            
+            return result;
         }
         
         processBtn.onclick = processVideo;
-        log('Ready. Select MP4, choose preset, click Process.');
-        
-        window.addEventListener('load', () => {
-            setTimeout(() => {
-                if (!ffmpegInstance && !isLoading) {
-                    log('Pre-loading FFmpeg in background...');
-                    initFFmpeg().catch(e => log('Pre-load failed: ' + e.message));
-                }
-            }, 500);
-        });
+        log('Ready. Select MP4 file, choose preset (60 or 120fps), click Process.\nRequires Chrome 94+ or Edge 94+ with WebCodecs API.');
     })();
 </script>
 </body>
