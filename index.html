@@ -32,7 +32,7 @@
     <div class="footer">Processes entirely in your browser. No upload to any server. 1080p 60/120fps preserved.</div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.6/dist/umd/ffmpeg.js"></script>
+<script src="https://unpkg.com/@ffmpeg/ffmpeg@0.11.6/dist/umd/ffmpeg.js"></script>
 <script>
     (function() {
         const logElement = document.getElementById('log');
@@ -57,19 +57,19 @@
             log('Loading FFmpeg (25MB)... 30-60 seconds');
             try {
                 if (typeof window.FFmpeg === 'undefined') {
-                    throw new Error('FFmpeg library failed to load. Check internet and refresh.');
+                    throw new Error('FFmpeg library not loaded. Retrying...');
                 }
                 const { FFmpeg } = window;
                 ffmpegInstance = new FFmpeg();
                 await ffmpegInstance.load({
-                    coreURL: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.js',
-                    wasmURL: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.wasm'
+                    coreURL: 'https://unpkg.com/@ffmpeg/core@0.11.6/dist/umd/ffmpeg-core.js',
+                    wasmURL: 'https://unpkg.com/@ffmpeg/core@0.11.6/dist/umd/ffmpeg-core.wasm'
                 });
                 log('FFmpeg ready. Select video and click Process.');
                 isLoading = false;
                 return ffmpegInstance;
             } catch (err) {
-                log('FFmpeg error: ' + err.message);
+                log('FFmpeg error: ' + err.message + ' - Try refreshing the page.');
                 isLoading = false;
                 throw err;
             }
