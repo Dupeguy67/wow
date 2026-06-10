@@ -31,42 +31,46 @@
     <pre id="log">Waiting for input...</pre>
     <div class="footer">Processes entirely in your browser. No upload to any server. 1080p 60/120fps preserved.</div>
 </div>
-<script src="https://unpkg.com/@ffmpeg/ffmpeg@0.12.6/dist/umd/ffmpeg.js"></script>
+
+<script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.6/dist/umd/ffmpeg.js"></script>
 <script>
     (function() {
-        const log = document.getElementById('log');
+        const logElement = document.getElementById('log');
         const fileInput = document.getElementById('fileInput');
         const processBtn = document.getElementById('processBtn');
-        let ffmpeg = null;
-        let ffmpegLoading = false;
+        let ffmpegInstance = null;
+        let isLoading = false;
 
-        function logMessage(msg) {
-            log.innerText = msg;
-            console.log(msg);
+        function log(message) {
+            logElement.innerText = message;
+            console.log(message);
         }
 
-        async function loadFFmpeg() {
-            if (ffmpeg) return ffmpeg;
-            if (ffmpegLoading) {
-                logMessage('FFmpeg already loading, please wait...');
-                while (ffmpegLoading) await new Promise(r => setTimeout(r, 100));
-                return ffmpeg;
+        async function initFFmpeg() {
+            if (ffmpegInstance) return ffmpegInstance;
+            if (isLoading) {
+                log('FFmpeg already loading, waiting...');
+                while (isLoading) await new Promise(r => setTimeout(r, 100));
+                return ffmpegInstance;
             }
-            ffmpegLoading = true;
-            logMessage('Loading FFmpeg WASM (25MB)... This may take 30-60 seconds.');
+            isLoading = true;
+            log('Loading FFmpeg (25MB)... 30-60 seconds');
             try {
+                if (typeof window.FFmpeg === 'undefined') {
+                    throw new Error('FFmpeg library failed to load. Check internet and refresh.');
+                }
                 const { FFmpeg } = window;
-                ffmpeg = new FFmpeg();
-                await ffmpeg.load({
-                    coreURL: 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.js',
-                    wasmURL: 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.wasm'
+                ffmpegInstance = new FFmpeg();
+                await ffmpegInstance.load({
+                    coreURL: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.js',
+                    wasmURL: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.wasm'
                 });
-                logMessage('FFmpeg ready. Select a video and click process.');
-                ffmpegLoading = false;
-                return ffmpeg;
+                log('FFmpeg ready. Select video and click Process.');
+                isLoading = false;
+                return ffmpegInstance;
             } catch (err) {
-                logMessage('FFmpeg load error: ' + err.message);
-                ffmpegLoading = false;
+                log('FFmpeg error: ' + err.message);
+                isLoading = false;
                 throw err;
             }
         }
@@ -74,86 +78,100 @@
         async function processVideo() {
             try {
                 if (!fileInput.files || fileInput.files.length === 0) {
-                    logMessage('No file selected. Please choose an MP4 video.');
+                    log('No file selected. Choose an MP4 video.');
                     return;
                 }
                 const file = fileInput.files[0];
-                const is120fps = document.getElementById('opt120').checked;
-                const fps = is120fps ? 120 : 60;
-                const bitrate = is120fps ? '35000k' : '25000k';
+                const is120 = document.getElementById('opt120').checked;
+                const fps = is120 ? 120 : 60;
+                const bitrate = is120 ? '35000k' : '25000k';
                 const gop = fps * 2;
                 
-                logMessage(`Processing: 1080p, ${fps} fps, ${bitrate}, GOP=${gop}...`);
-                const engine = await loadFFmpeg();
-                if (!engine) { logMessage('FFmpeg failed to load.'); return; }
+                log(`Processing: 1080p ${fps}fps ${bitrate}...`);
+                const ffmpeg = await initFFmpeg();
+                if (!ffmpeg) return;
                 
-                logMessage('Reading file into memory...');
-                const data = new Uint8Array(await file.arrayBuffer());
-                logMessage(`File size: ${(data.length / 1024 / 1024).toFixed(2)} MB`);
-                await engine.writeFile('input.mp4', data);
-                logMessage('Encoding video (this may take 1-5 minutes)...');
+                log('Reading file...');
+                const fileData = new Uint8Array(await file.arrayBuffer());
+                log(`File size: ${(fileData.length / 1024 / 1024).toFixed(2)} MB`);
+                await ffmpeg.writeFile('input.mp4', fileData);
+                log('Encoding (1-5 minutes)...');
                 
-                await engine.exec([
-                    '-i', 'input.mp4', '-c:v', 'libx264', '-profile:v', 'high', '-level', '4.2',
-                    '-b:v', bitrate, '-r', fps.toString(), '-g', gop.toString(),
-                    '-bf', '2', '-refs', '3', '-pix_fmt', 'yuv422p',
-                    '-x264-params', 'nal-hrd=cbr:force-cfr=1', '-movflags', '+faststart', 'output.mp4'
+                await ffmpeg.exec([
+                    '-i', 'input.mp4',
+                    '-c:v', 'libx264',
+                    '-profile:v', 'high',
+                    '-level', '4.2',
+                    '-b:v', bitrate,
+                    '-r', fps.toString(),
+                    '-g', gop.toString(),
+                    '-bf', '2',
+                    '-refs', '3',
+                    '-pix_fmt', 'yuv422p',
+                    '-x264-params', 'nal-hrd=cbr:force-cfr=1',
+                    '-movflags', '+faststart',
+                    'output.mp4'
                 ]);
                 
-                logMessage('Reading encoded file...');
-                const outputData = await engine.readFile('output.mp4');
-                const buffer = new Uint8Array(outputData);
+                log('Reading encoded file...');
+                const encodedData = await ffmpeg.readFile('output.mp4');
+                const buffer = new Uint8Array(encodedData);
                 
-                logMessage('Applying moov atom padding (56 bytes)...');
-                let moovIndex = -1;
+                log('Adding 56-byte padding before moov atom...');
+                let moovPos = -1;
                 for (let i = 0; i < buffer.length - 4; i++) {
                     if (buffer[i] === 0x6D && buffer[i+1] === 0x6F && buffer[i+2] === 0x6F && buffer[i+3] === 0x76) {
-                        moovIndex = i; break;
+                        moovPos = i;
+                        break;
                     }
                 }
                 
                 let finalBuffer;
-                if (moovIndex !== -1) {
+                if (moovPos !== -1) {
                     const padding = new Uint8Array(56);
-                    const before = buffer.slice(0, moovIndex);
-                    const after = buffer.slice(moovIndex);
-                    finalBuffer = new Uint8Array(before.length + 56 + after.length);
-                    finalBuffer.set(before, 0);
-                    finalBuffer.set(padding, before.length);
-                    finalBuffer.set(after, before.length + 56);
-                    logMessage('Padding applied.');
+                    const beforeMoov = buffer.slice(0, moovPos);
+                    const fromMoov = buffer.slice(moovPos);
+                    finalBuffer = new Uint8Array(beforeMoov.length + 56 + fromMoov.length);
+                    finalBuffer.set(beforeMoov, 0);
+                    finalBuffer.set(padding, beforeMoov.length);
+                    finalBuffer.set(fromMoov, beforeMoov.length + 56);
+                    log('Padding applied.');
                 } else {
-                    logMessage('Warning: moov not found, using original.');
+                    log('Warning: moov not found, using original file.');
                     finalBuffer = buffer;
                 }
                 
                 const blob = new Blob([finalBuffer], { type: 'video/mp4' });
                 const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = `tiktok_bypass_1080p_${fps}fps.mp4`;
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
+                const downloadLink = document.createElement('a');
+                downloadLink.href = url;
+                downloadLink.download = `tiktok_bypass_1080p_${fps}fps.mp4`;
+                document.body.appendChild(downloadLink);
+                downloadLink.click();
+                document.body.removeChild(downloadLink);
                 URL.revokeObjectURL(url);
-                logMessage(`SUCCESS! Saved as tiktok_bypass_1080p_${fps}fps.mp4`);
-                await engine.deleteFile('input.mp4');
-                await engine.deleteFile('output.mp4');
+                
+                log(`SUCCESS! File saved as tiktok_bypass_1080p_${fps}fps.mp4`);
+                
+                await ffmpeg.deleteFile('input.mp4');
+                await ffmpeg.deleteFile('output.mp4');
+                
             } catch (err) {
-                logMessage('ERROR: ' + err.message);
+                log('ERROR: ' + err.message);
                 console.error(err);
             }
         }
         
         processBtn.onclick = processVideo;
-        logMessage('Ready. Select MP4 file, choose preset, click Process.');
+        log('Ready. Select MP4, choose preset, click Process.');
+        
         window.addEventListener('load', () => {
             setTimeout(() => {
-                if (!ffmpeg && !ffmpegLoading) {
-                    logMessage('Pre-loading FFmpeg...');
-                    loadFFmpeg().catch(e => logMessage('Pre-load failed: ' + e.message));
+                if (!ffmpegInstance && !isLoading) {
+                    log('Pre-loading FFmpeg in background...');
+                    initFFmpeg().catch(e => log('Pre-load failed: ' + e.message));
                 }
-            }, 1000);
+            }, 500);
         });
     })();
 </script>
